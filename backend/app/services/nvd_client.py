@@ -1,5 +1,7 @@
 """Small client for looking up a single CVE in the NVD CVE API 2.0."""
 
+import os
+
 import requests
 
 
@@ -7,11 +9,17 @@ NVD_CVE_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_TIMEOUT_SECONDS = 30
 
 
+def _request_headers() -> dict[str, str]:
+    api_key = os.getenv("NVD_API_KEY")
+    return {"apiKey": api_key} if api_key else {}
+
+
 def fetch_cve(cve_id: str) -> dict:
     """Fetch the raw NVD CVE API 2.0 response for *cve_id*."""
     response = requests.get(
         NVD_CVE_API_URL,
         params={"cveId": cve_id},
+        headers=_request_headers(),
         timeout=NVD_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
@@ -70,6 +78,7 @@ def search_cves(software_name: str, software_version: str) -> list[dict]:
             "keywordSearch": f"{software_name} {software_version}",
             "resultsPerPage": 2000,
         },
+        headers=_request_headers(),
         timeout=NVD_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
@@ -102,6 +111,7 @@ def fetch_cves(limit: int = 10) -> list[dict]:
     response = requests.get(
         NVD_CVE_API_URL,
         params={"resultsPerPage": limit, "startIndex": 0},
+        headers=_request_headers(),
         timeout=NVD_TIMEOUT_SECONDS,
     )
     response.raise_for_status()

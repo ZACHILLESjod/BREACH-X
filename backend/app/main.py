@@ -1,11 +1,14 @@
-import requests
 import os
+import requests
+import secrets
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import engine, get_db
 from app.models.asset import Asset
 from app.models.software import Software
 from app.models.vulnerability import NvdAssessRequest, Vulnerability, VulnerabilityMatchRequest
@@ -32,13 +35,30 @@ cors_origins = [
     ).split(",")
     if origin.strip()
 ]
+if "*" in cors_origins:
+    raise RuntimeError("CORS_ORIGINS must list exact origins; wildcard origins are not supported.")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_api_key(api_key: str | None = Depends(api_key_header)) -> None:
+    configured_key = os.getenv("BREACHX_API_KEY")
+    if not configured_key:
+        raise HTTPException(
+            status_code=503,
+            detail="API key protection is not configured.",
+        )
+    if not api_key or not secrets.compare_digest(
+        api_key.encode("utf-8"), configured_key.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="A valid X-API-Key is required.")
 
 
 @app.get("/")
@@ -50,7 +70,24 @@ def home():
     }
 
 
-@app.post("/assets")
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/health/db")
+def database_health():
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Database is not configured.")
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except SQLAlchemyError as error:
+        raise HTTPException(status_code=503, detail="Database is unavailable.") from error
+    return {"status": "ok", "database": "connected"}
+
+
+@app.post("/assets", dependencies=[Depends(require_api_key)])
 def create_asset(asset: Asset, db: Session | None = Depends(get_db)):
     if db is None:
         raise HTTPException(status_code=503, detail="Database is not configured.")
@@ -88,7 +125,7 @@ def get_assets(db: Session | None = Depends(get_db)):
     ]
 
 
-@app.post("/software")
+@app.post("/software", dependencies=[Depends(require_api_key)])
 def create_software(software: Software, db: Session | None = Depends(get_db)):
     if db is None:
         raise HTTPException(status_code=503, detail="Database is not configured.")
@@ -121,7 +158,7 @@ def get_asset_exposure(asset_id: str, db: Session | None = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Asset not found.")
     return exposure
 
-@app.post("/vulnerabilities")
+@app.post("/vulnerabilities", dependencies=[Depends(require_api_key)])
 def create_vulnerability(
     vulnerability: Vulnerability,
     db: Session | None = Depends(get_db),
@@ -148,7 +185,7 @@ def create_vulnerability(
     }
 
 
-@app.get("/cve/{cve_id}")
+@app.get("/cve/{cve_id}", dependencies=[Depends(require_api_key)])
 def lookup_cve(cve_id: str, db: Session | None = Depends(get_db)):
     if db is not None:
         try:
@@ -240,7 +277,7 @@ def lookup_cve(cve_id: str, db: Session | None = Depends(get_db)):
     }
 
 
-@app.post("/nvd/assess")
+@app.post("/nvd/assess", dependencies=[Depends(require_api_key)])
 def assess_software_with_nvd(
     request: NvdAssessRequest,
     db: Session | None = Depends(get_db),
@@ -269,7 +306,7 @@ def assess_software_with_nvd(
         raise HTTPException(status_code=503, detail="Unable to store NVD vulnerability data.") from error
 
 
-@app.post("/nvd/sync")
+@app.post("/nvd/sync", dependencies=[Depends(require_api_key)])
 def sync_nvd(
     limit: int = Query(default=10, ge=1, le=2000),
     db: Session | None = Depends(get_db),
