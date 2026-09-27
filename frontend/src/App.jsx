@@ -50,7 +50,7 @@ function AnimatedValue({ value, duration = 650 }) {
   const numeric = typeof value === 'number' && Number.isFinite(value)
   const [display, setDisplay] = useState(numeric ? 0 : value)
   useEffect(() => {
-    if (!numeric) {
+    if (!numeric || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
       setDisplay(value)
       return undefined
     }
@@ -109,17 +109,12 @@ function ExposureGauge({ score, assessed }) {
   </div>
 }
 
-function SeverityCards({ rows }) {
-  const levels = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
-  return <div className="severity-grid">{levels.map((level) => <div className={`severity-card severity-${level.toLowerCase()}`} key={level}><span className="severity-line" /><span className="eyebrow">{level}</span><strong><AnimatedValue value={rows.filter((row) => row.matched && row.risk_level === level).length} /></strong><small>matched findings</small></div>)}</div>
-}
-
-function PostureRail({ rows, assets }) {
+function RiskDistribution({ rows, loading }) {
   const matched = rows.filter((row) => row.matched)
-  const exposedAssets = new Set(matched.map((row) => row.asset_id)).size
-  const severity = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']
-  const maximum = Math.max(1, ...severity.map((level) => matched.filter((row) => row.risk_level === level).length))
-  return <section className="posture-rail"><div className="posture-intro"><span className="eyebrow">ESTATE POSTURE</span><strong>{exposedAssets ? `${exposedAssets} of ${assets.length} assets require attention` : 'No matched exposure observed'}</strong><small>Derived from persisted asset assessments</small></div><div className="posture-bars">{severity.map((level) => { const count = matched.filter((row) => row.risk_level === level).length; return <div className={`posture-bar posture-${level.toLowerCase()}`} key={level}><div><span>{level}</span><b><AnimatedValue value={count} /></b></div><i style={{ width: `${(count / maximum) * 100}%` }} /></div> })}</div><div className="posture-total"><span className="eyebrow">MATCHED</span><strong><AnimatedValue value={matched.length} /></strong><small>vulnerabilities</small></div></section>
+  const levels = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN', 'NONE']
+  const counts = levels.map((level) => [level, matched.filter((row) => String(row.risk_level).toUpperCase() === level).length])
+  const denominator = Math.max(1, matched.length)
+  return <section className="panel risk-distribution"><div className="panel-heading"><div><span className="eyebrow">RISK DISTRIBUTION</span><h2>Matched findings by severity</h2></div><span className="subtle-count">{loading ? 'Assessing…' : `${matched.length} matched`}</span></div>{loading ? <div className="risk-distribution-loading" aria-label="Loading severity distribution">{levels.slice(0, 4).map((level) => <div className="risk-skeleton-row" key={level}><i /><span /><b /></div>)}</div> : matched.length ? <><div className="severity-segments" role="img" aria-label={counts.filter(([, count]) => count > 0).map(([level, count]) => `${level}: ${count}`).join(', ')}>{counts.map(([level, count]) => count > 0 && <i key={level} className={`severity-segment severity-${level.toLowerCase()}`} style={{ width: `${count / denominator * 100}%` }} />)}</div><div className="risk-distribution-rows">{counts.map(([level, count]) => <div className={`risk-distribution-row severity-${level.toLowerCase()}`} key={level}><span className="risk-level-label"><i />{level === 'UNKNOWN' ? 'UNSCORED' : level}</span><div className="risk-distribution-track"><i style={{ width: `${count ? Math.max(2, count / denominator * 100) : 0}%` }} /></div><b><AnimatedValue value={count} /></b><small>{matched.length ? `${Math.round(count / matched.length * 100)}%` : '0%'}</small></div>)}</div></> : <div className="risk-distribution-empty"><span className="empty-icon"><Icon name="shield" size={19} /></span><div><strong>No matched findings in loaded assessments</strong><small>The distribution will reflect stored CVEs that match monitored software.</small></div></div>}</section>
 }
 
 function ExposureTrend({ rows }) {
@@ -155,15 +150,15 @@ function SecurityInsight({ rows }) {
   </section>
 }
 
-function CommandHero({ allRows, assetRecords, softwareCount, navigate }) {
+function CommandHero({ allRows, navigate, assessing, hasAssessment, apiState }) {
   const matched = allRows.filter((row) => row.matched)
   const maxCvss = matched.reduce((max, row) => Math.max(max, Number(row.cvss_score) || 0), 0)
   const score = Math.round(maxCvss * 10)
   const top = [...matched].sort((a, b) => (b.cvss_score ?? 0) - (a.cvss_score ?? 0))[0]
   return <section className="command-hero">
     <div className="hero-grid" />
-    <div className="hero-score"><ExposureGauge score={score} assessed={allRows.length > 0} /><span className="gauge-caption">PEAK OBSERVED CVSS × 10</span><span className="status-chip"><i />{allRows.length ? 'ASSESSMENT ACTIVE' : 'AWAITING ASSESSMENT'}</span></div>
-    <div className="hero-copy"><span className="eyebrow hero-kicker"><i /> BREACH-X / COMMAND CENTER</span><h2>Adaptive Cyber Exposure &amp; Threat Intelligence Platform</h2><p>Correlate every monitored asset, installed component, and stored CVE into a live view of where exposure enters the estate.</p><SeverityCards rows={allRows} /><div className="hero-kpis"><div><strong><AnimatedValue value={assetRecords.length} /></strong><span>assets monitored</span></div><div><strong><AnimatedValue value={softwareCount} /></strong><span>software assessed</span></div><div><strong><AnimatedValue value={matched.length} /></strong><span>matched findings</span></div></div>{top && <button className="hero-alert" onClick={() => navigate(`/assets/${encodeURIComponent(top.asset_id)}`)}><Icon name="target" size={16} /><span>Highest observed CVSS <b>{Number(top.cvss_score).toFixed(1)}</b> on {top.asset_hostname}</span><Icon name="arrow" size={15} /></button>}</div>
+    <div className="hero-score"><ExposureGauge score={score} assessed={hasAssessment} /><span className="gauge-caption">PEAK OBSERVED CVSS × 10</span><span className="status-chip"><i />{assessing ? 'ASSESSING ASSETS' : hasAssessment ? 'ASSESSMENT READY' : 'AWAITING ASSETS'}</span></div>
+    <div className="hero-copy"><div className="hero-identity"><span className="eyebrow hero-kicker"><i /> BREACH-X <span>/ EXPOSURE INTELLIGENCE</span></span><span className={`hero-api-status ${apiState}`}><i /> API {apiState === 'online' ? 'CONNECTED' : apiState === 'offline' ? 'UNAVAILABLE' : 'CHECKING'}</span></div><h2>See exposure. Prioritize response.</h2><p>Monitor persisted assets, installed software, and locally stored CVEs to understand which components are affected and where risk is concentrated.</p><div className="hero-observation"><span className="eyebrow">CURRENT ASSESSMENT</span><strong>{assessing ? 'Evaluating asset exposure…' : hasAssessment ? `${matched.length} matched finding${matched.length === 1 ? '' : 's'} across loaded assets` : 'Waiting for asset assessments'}</strong></div>{top && <button className="hero-alert" onClick={() => navigate(`/assets/${encodeURIComponent(top.asset_id)}`)}><Icon name="target" size={16} /><span>Priority finding <b>{top.cve_id}</b><small>{top.asset_hostname} · {top.affected_software} · CVSS {top.cvss_score == null ? 'unscored' : Number(top.cvss_score).toFixed(1)}</small></span><Icon name="arrow" size={15} /></button>}</div>
   </section>
 }
 
@@ -192,13 +187,42 @@ function ExposureGraph({ rows, assets, navigate }) {
 function CvssRing({ score, severity }) {
   const radius = 19
   const circumference = 2 * Math.PI * radius
-  const value = Math.max(0, Math.min(10, Number(score) || 0))
-  return <div className={`cvss-ring ring-${String(severity).toLowerCase()}`} aria-label={`CVSS ${value.toFixed(1)} out of 10`}><svg viewBox="0 0 48 48"><circle className="cvss-track" cx="24" cy="24" r={radius} /><circle className="cvss-progress" cx="24" cy="24" r={radius} strokeDasharray={circumference} strokeDashoffset={circumference - circumference * value / 10} /></svg><strong>{value.toFixed(1)}</strong></div>
+  const hasScore = score !== null && score !== undefined && score !== '' && Number.isFinite(Number(score))
+  const value = hasScore ? Math.max(0, Math.min(10, Number(score))) : 0
+  return <div className={`cvss-ring ring-${String(severity).toLowerCase()}`} aria-label={hasScore ? `CVSS ${value.toFixed(1)} out of 10` : 'CVSS score unavailable'}><svg viewBox="0 0 48 48"><circle className="cvss-track" cx="24" cy="24" r={radius} />{hasScore && <circle className="cvss-progress" cx="24" cy="24" r={radius} strokeDasharray={circumference} strokeDashoffset={circumference - circumference * value / 10} />}</svg><strong>{hasScore ? value.toFixed(1) : '—'}</strong></div>
 }
 
-function FindingCard({ row }) {
+function FindingCard({ row, onOpenExplorer }) {
   const severity = String(row.risk_level || row.original_severity || 'UNKNOWN').toUpperCase()
-  return <article className={`finding-card risk-${severity.toLowerCase()}`}><div className="finding-accent" /><header><div><RiskBadge level={severity} /><h3>{row.cve_id}</h3></div><CvssRing score={row.cvss_score} severity={severity} /></header>{(row.title || row.description) && <p className="finding-description">{row.title || row.description}</p>}<p className="finding-software">{row.affected_software}<span>{row.vendor || 'Unknown vendor'} · installed {row.installed_version}</span></p>{row.asset_hostname && <div className="finding-asset"><Icon name="server" size={13} /><span>AFFECTED ASSET</span><strong>{row.asset_hostname}</strong></div>}{(row.affected_range || row.fixed_version) && <div className="finding-range">{row.affected_range && <span>Affected range <b>{row.affected_range}</b></span>}{row.fixed_version && <span>Fixed in <b>{row.fixed_version}</b></span>}</div>}<div className="finding-meta"><span>ASSESSMENT</span><b className={row.matched ? 'is-matched' : 'is-clear'}>{row.matched ? 'AFFECTED' : 'NOT AFFECTED'}</b></div><div className="finding-bar"><i style={{ width: `${Math.max(3, Math.min(100, Number(row.cvss_score || 0) * 10))}%` }} /></div></article>
+  const affectedRange = row.affected_range || [row.min_version, row.max_version].filter(Boolean).join(' – ')
+  const hasDetails = row.description || affectedRange || row.fixed_version || row.affected_products?.length
+  return <article className={`finding-card risk-${severity.toLowerCase()}`}><div className="finding-accent" /><header><div><RiskBadge level={severity} /><h3>{row.cve_id}</h3></div><CvssRing score={row.cvss_score} severity={severity} /></header><p className="finding-software">{row.affected_software}<span>{row.vendor || 'Unknown vendor'} · installed {row.installed_version}</span></p>{row.asset_hostname && <div className="finding-asset"><Icon name="server" size={13} /><span>{row.matched ? 'AFFECTED ASSET' : 'ASSESSED ASSET'}</span><strong>{row.asset_hostname}</strong></div>}<div className="finding-meta"><span>ASSESSMENT</span><b className={row.matched ? 'is-matched' : 'is-clear'}>{row.matched ? 'AFFECTED' : 'NOT AFFECTED'}</b></div><div className="finding-bar"><i style={{ width: `${Math.max(3, Math.min(100, Number(row.cvss_score || 0) * 10))}%` }} /></div>{hasDetails && <details className="finding-details"><summary>Assessment details</summary>{row.description && <p className="finding-description">{row.description}</p>}{(affectedRange || row.fixed_version) && <div className="finding-range">{affectedRange && <span>Affected range <b>{affectedRange}</b></span>}{row.fixed_version && <span>Fixed in <b>{row.fixed_version}</b></span>}</div>}{row.affected_products?.length > 0 && <div className="finding-products"><span>AFFECTED PRODUCT MATCHES</span>{row.affected_products.map((product, index) => <p key={`${product.vendor}-${product.product}-${index}`}>{product.vendor} / {product.product}{product.edition ? ` / ${product.edition}` : ''}<small>{product.min_version || 'Any version'}{product.max_version ? ` – ${product.max_version}` : ' and later'}</small></p>)}</div>}</details>}{onOpenExplorer && <button className="finding-explorer-link" onClick={onOpenExplorer}>Open vulnerability explorer <Icon name="arrow" size={13} /></button>}</article>
+}
+
+function AssetExposureCard({ asset, exposure, error, assessing, onOpen }) {
+  const findings = exposure?.exposures.filter((row) => row.matched) || []
+  const levels = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN', 'NONE']
+  const severityCounts = levels.map((level) => [level, findings.filter((row) => String(row.risk_level).toUpperCase() === level).length]).filter(([, count]) => count > 0)
+  const softwareNames = [...new Set(findings.map((row) => row.affected_software).filter(Boolean))]
+  const state = error ? 'UNAVAILABLE' : assessing && !exposure ? 'ASSESSING' : exposure ? findings.length ? 'EXPOSED' : 'NO MATCHES' : 'NOT ASSESSED'
+  return <button className={`asset-exposure-card ${findings.length ? 'has-exposure' : ''}`} onClick={onOpen}>
+    <div className="asset-exposure-top"><span className="asset-avatar"><Icon name="server" /></span><span className={`asset-state ${findings.length ? 'state-exposed' : state === 'NO MATCHES' ? 'state-clear' : 'state-pending'}`}><i />{state}</span></div>
+    <h3>{asset.hostname || asset.asset_id}</h3><p className="asset-exposure-address">{[asset.ip_address, asset.asset_type, asset.operating_system].filter(Boolean).join(' · ') || 'Asset metadata unavailable'}</p>
+    <div className="asset-exposure-count"><strong>{exposure ? findings.length : '—'}</strong><span>matched findings</span></div>
+    {severityCounts.length ? <div className="asset-severity-tags">{severityCounts.map(([level, count]) => <span key={level} className={`severity-${level.toLowerCase()}`}><i />{level === 'UNKNOWN' ? 'UNSCORED' : level === 'NONE' ? 'NO SEVERITY' : level}<b>{count}</b></span>)}</div> : <div className="asset-severity-tags empty-severity"><span>{exposure ? 'No matched severity' : error ? 'Exposure request failed' : 'Assessment pending'}</span></div>}
+    <div className="asset-affected-software"><span className="eyebrow">AFFECTED SOFTWARE</span><strong>{softwareNames.length ? softwareNames.slice(0, 2).join(' · ') : exposure ? 'No affected software' : 'Not yet assessed'}</strong>{softwareNames.length > 2 && <small>+{softwareNames.length - 2} more components</small>}</div>
+    <span className="asset-exposure-open">Open asset profile <Icon name="arrow" size={14} /></span>
+  </button>
+}
+
+function PriorityFinding({ row, onOpen }) {
+  const severity = String(row.risk_level || row.original_severity || 'UNKNOWN').toUpperCase()
+  return <button className="priority-finding" onClick={onOpen}>
+    <span className={`priority-severity severity-${severity.toLowerCase()}`}><i />{severity}</span>
+    <span className="priority-finding-main"><strong>{row.cve_id}</strong><span>{row.asset_hostname} · {row.affected_software}</span><small>{row.description || 'No description is available in the stored vulnerability record.'}</small></span>
+    <span className="priority-cvss"><strong>{row.cvss_score == null ? '—' : Number(row.cvss_score).toFixed(1)}</strong><small>CVSS</small></span>
+    <Icon name="arrow" size={15} />
+  </button>
 }
 
 function DataUnavailable({ title, detail }) { return <section className="panel unavailable"><div className="empty-icon"><Icon name="activity" /></div><h3>{title}</h3><p>{detail}</p><span className="data-flag">LIVE API SURFACE NOT AVAILABLE</span></section> }
@@ -219,7 +243,7 @@ function Sidebar({ page, navigate, apiState, assetCount }) {
     </button>
     <div className="nav-label">WORKSPACE</div>
     <nav>{links.map((link) => <motion.button key={link.id} aria-label={link.label} title={link.label} onClick={() => navigate(link.path)} className={`nav-link ${page === link.id ? 'active' : ''}`} whileHover={{ x: 2 }} whileTap={{ scale: 0.985 }}><Icon name={link.icon} /><span>{link.label}</span>{link.id === 'assets' && assetCount > 0 && <span className="nav-count">{assetCount}</span>}</motion.button>)}</nav>
-    <div className="sidebar-bottom"><div className="connection"><span className={`connection-dot ${apiState}`} /><span><strong>API {apiState === 'online' ? 'reachable' : apiState === 'offline' ? 'unavailable' : 'checking'}</strong><small>Local FastAPI</small></span></div><span className="sidebar-version">BREACH-X · LOCAL</span></div>
+    <div className="sidebar-bottom"><div className="connection"><span className={`connection-dot ${apiState}`} /><span><strong>API {apiState === 'online' ? 'reachable' : apiState === 'offline' ? 'unavailable' : 'checking'}</strong><small>FastAPI service</small></span></div><span className="sidebar-version">BREACH-X · v0.1.0</span></div>
   </motion.aside>
 }
 
@@ -230,56 +254,75 @@ function Topbar({ title, subtitle, onLookup, loading, error }) {
   </header>
 }
 
-function Overview({ assetRecords, exposureById, allRows, onLookup, loading, error, navigate, inventoryLoading, inventoryError, onReloadAssets, assessingInventory }) {
-  const softwareCount = Object.values(exposureById).reduce((total, result) => total + result.software.length, 0)
-  const exposedAssetCount = new Set(allRows.map((row) => row.asset_id)).size
-  const criticalHighCount = allRows.filter((row) => row.matched && ['CRITICAL', 'HIGH'].includes(row.risk_level)).length
-  const highRiskRows = allRows.filter((row) => row.matched && ['CRITICAL', 'HIGH'].includes(row.risk_level))
-    .sort((a, b) => (b.cvss_score ?? -1) - (a.cvss_score ?? -1)).slice(0, 6)
+function Overview({ assetRecords, exposureById, allRows, errorsById, onLookup, loading, error, navigate, apiState, inventoryLoading, inventoryError, onReloadAssets, assessingInventory }) {
+  const softwareCount = assetRecords.reduce((total, asset) => total + (exposureById[asset.asset_id]?.software.length || 0), 0)
+  const matchedRows = allRows.filter((row) => row.matched)
+  const exposedAssetCount = new Set(matchedRows.map((row) => row.asset_id)).size
+  const failedExposureCount = assetRecords.filter((asset) => errorsById[asset.asset_id]).length
+  const priorityRows = [...matchedRows].sort((a, b) => (Number(b.cvss_score) || 0) - (Number(a.cvss_score) || 0)).slice(0, 6)
   const assetEntries = assetRecords.map((asset) => [asset.asset_id, asset])
   return <>
-    <Topbar title="Overview" subtitle="Asset exposure and vulnerability posture" onLookup={onLookup} loading={loading} error={error} />
+    <Topbar title="Overview" subtitle="Exposure intelligence across your monitored assets" onLookup={onLookup} loading={loading} error={error} />
     <section className="page-content">
-      <CommandHero allRows={allRows} assetRecords={assetRecords} softwareCount={softwareCount} navigate={navigate} />
+      <CommandHero allRows={allRows} navigate={navigate} assessing={assessingInventory} hasAssessment={assetRecords.some((asset) => exposureById[asset.asset_id])} apiState={apiState} />
       <div className="scope-notice"><span className="notice-mark">i</span><span><strong>Inventory from API</strong> — total assets reflects <code>GET /assets</code>. {assessingInventory ? 'Assessing persisted assets…' : 'Exposure metrics reflect loaded asset assessments.'}</span></div>
       <div className="metric-grid">
         <MetricCard label="Total assets" value={inventoryLoading ? '…' : inventoryError ? '—' : assetEntries.length} note="Persisted asset inventory" icon="server" />
-        <MetricCard label="Exposed assets" value={exposedAssetCount} note="Assets with matched CVEs" icon="shield" tone="red" />
-        <MetricCard label="Installed software" value={softwareCount} note="For assessed assets" icon="software" tone="blue" />
-        <MetricCard label="Matched findings" value={allRows.length} note="Persisted CVEs affecting assets" icon="activity" tone="violet" />
-        <MetricCard label="Critical / high" value={criticalHighCount} note="Matched, assessed findings" icon="alert" tone="red" />
+        <MetricCard label="Exposed assets" value={assessingInventory ? '…' : exposedAssetCount} note="Assets with matched CVEs" icon="shield" tone="red" />
+        <MetricCard label="Evaluated software" value={assessingInventory ? '…' : softwareCount} note="Components from loaded assessments" icon="software" tone="blue" />
+        <MetricCard label="Matched findings" value={assessingInventory ? '…' : matchedRows.length} note="Persisted CVEs affecting assets" icon="activity" tone="violet" />
       </div>
-      <PostureRail rows={allRows} assets={assetRecords} />
+      <RiskDistribution rows={allRows} loading={assessingInventory} />
       <div className="insight-grid"><ExposureTrend rows={allRows} /><SecurityInsight rows={allRows} /></div>
       {inventoryError && <div className="inventory-error" role="alert"><Icon name="alert" size={17} /><span><strong>Asset inventory unavailable</strong><small>{inventoryError}</small></span><button className="button button-secondary" onClick={onReloadAssets}>Retry</button></div>}
+      {failedExposureCount > 0 && !assessingInventory && <div className="inventory-error" role="alert"><Icon name="alert" size={17} /><span><strong>Exposure assessment incomplete</strong><small>{failedExposureCount} asset exposure request{failedExposureCount === 1 ? ' could not' : 's could not'} be loaded. Refresh the inventory to retry.</small></span><button className="button button-secondary" onClick={onReloadAssets}>Retry</button></div>}
       {inventoryLoading && assetEntries.length === 0 && <section className="panel"><LoadingState label="Loading persisted assets…" /></section>}
       {!inventoryLoading && !inventoryError && assetEntries.length === 0 && <section className="panel welcome-panel">
         <EmptyState title="No assets registered" detail="Assets persisted through the BREACH-X API will appear here." action={<button className="button button-secondary" onClick={onReloadAssets}>Refresh inventory</button>} />
       </section>}
-      <div className="content-grid">
-        <section className="panel findings-panel">
-          <div className="panel-heading"><div><span className="eyebrow">PRIORITY QUEUE</span><h2>Highest-risk exposures</h2></div><button className="text-button" onClick={() => navigate('/exposures')}>View all <Icon name="arrow" size={15} /></button></div>
-          <ExposureTable rows={highRiskRows} showAsset emptyTitle="No high-risk findings" />
-        </section>
-        <section className="panel tracked-panel">
-          <div className="panel-heading"><div><span className="eyebrow">INVENTORY</span><h2>Persisted assets</h2></div><button className="icon-button" onClick={() => navigate('/assets')} aria-label="View all assets"><Icon name="arrow" /></button></div>
-          {assetEntries.length ? <div className="asset-mini-list">{assetEntries.slice(0, 6).map(([id, asset]) => { const data = exposureById[id]; return <button key={id} className="asset-mini" onClick={() => navigate(`/assets/${encodeURIComponent(id)}`)}><span className="asset-avatar"><Icon name="server" /></span><span className="asset-mini-copy"><strong>{asset.hostname}</strong><small>{asset.ip_address} · {asset.asset_type} · {asset.operating_system || 'OS unspecified'} · {asset.criticality} criticality</small><small>ID · {id}</small></span><span className="mini-findings">{data ? `${data.exposures.filter((row) => row.matched).length} findings` : 'Assess'}</span><Icon name="arrow" size={16} /></button> })}</div> : <p className="muted-copy">The API returned no persisted assets.</p>}
-        </section>
-      </div>
+      {assetEntries.length > 0 && <section className="panel asset-overview-panel"><div className="panel-heading"><div><span className="eyebrow">EXPOSURE OVERVIEW</span><h2>Assets requiring attention</h2></div><button className="text-button" onClick={() => navigate('/assets')}>Explore all assets <Icon name="arrow" size={15} /></button></div><div className="asset-exposure-grid">{assetEntries.map(([id, asset]) => <AssetExposureCard key={id} asset={asset} exposure={exposureById[id]} error={errorsById[id]} assessing={assessingInventory} onOpen={() => navigate(`/assets/${encodeURIComponent(id)}`)} />)}</div></section>}
+      <section className="panel overview-priority-panel"><div className="panel-heading"><div><span className="eyebrow">PRIORITY FINDINGS</span><h2>Highest observed risk</h2></div><button className="text-button" onClick={() => navigate('/vulnerabilities')}>View vulnerability explorer <Icon name="arrow" size={15} /></button></div>{priorityRows.length ? <div className="priority-finding-list">{priorityRows.map((row, index) => <PriorityFinding key={`${row.asset_id}-${row.cve_id}-${row.software_id}-${index}`} row={row} onOpen={() => navigate(`/assets/${encodeURIComponent(row.asset_id)}`)} />)}</div> : <EmptyState title="No matched findings" detail="No stored CVEs matched the software returned by the loaded asset assessments." />}</section>
       <ExposureGraph rows={allRows} assets={assetRecords} navigate={navigate} />
       <footer className="page-foot"><Icon name="clock" size={14} /> Assessment data is retrieved live from the BREACH-X API. Exposure checks cover vulnerabilities currently stored locally.</footer>
     </section>
   </>
 }
 
-function AssetsPage({ assetRecords, exposureById, onLookup, loading, error, navigate, inventoryLoading, inventoryError, onReloadAssets }) {
+function AssetsPage({ assetRecords, exposureById, errorsById, onLookup, loading, error, navigate, inventoryLoading, inventoryError, onReloadAssets, assessingInventory }) {
+  // #region agent log
+  fetch('http://127.0.0.1:7723/ingest/73e337ca-b123-45e1-8b5c-2dd62a3fdfad',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b40d23'},body:JSON.stringify({sessionId:'b40d23',runId:'pre-fix',hypothesisId:'A',location:'App.jsx:AssetsPage',message:'AssetsPage received props',data:{hasErrorsById:errorsById!=null,errorsByIdType:typeof errorsById,hasAssessingInventory:typeof assessingInventory!=='undefined',hasAssetRecords:Array.isArray(assetRecords),assetCount:Array.isArray(assetRecords)?assetRecords.length:-1,hasAssetsProp:false,hasOnLoadAsset:false,hasSelectedAssetId:false},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState('all')
   const entries = assetRecords
+  const exposedCount = entries.filter((asset) => exposureById[asset.asset_id]?.exposures.some((row) => row.matched)).length
+  const noMatchCount = entries.filter((asset) => exposureById[asset.asset_id] && !exposureById[asset.asset_id].exposures.some((row) => row.matched)).length
+  const filteredEntries = useMemo(() => entries.filter((asset) => {
+    const data = exposureById[asset.asset_id]
+    const hasMatches = data?.exposures.some((row) => row.matched) || false
+    const matchesFilter = filter === 'all' || (filter === 'exposed' && hasMatches) || (filter === 'clear' && Boolean(data) && !hasMatches)
+    const query = search.trim().toLowerCase()
+    const matchesSearch = !query || [asset.asset_id, asset.hostname, asset.ip_address].some((value) => String(value || '').toLowerCase().includes(query))
+    return matchesFilter && matchesSearch
+  }), [entries, exposureById, filter, search])
+  const filters = [
+    { id: 'all', label: 'All', count: entries.length },
+    { id: 'exposed', label: 'Exposed', count: exposedCount },
+    { id: 'clear', label: 'No Matches', count: noMatchCount },
+  ]
   return <>
-    <Topbar title="Assets" subtitle="Asset inventory available to this dashboard" onLookup={onLookup} loading={loading} error={error} />
+    <Topbar title="Asset Intelligence" subtitle="Monitored assets, installed software, and exposure findings" onLookup={onLookup} loading={loading} error={error} />
     <section className="page-content">
-      <section className="panel inventory-panel"><div className="panel-heading"><div><span className="eyebrow">PERSISTED INVENTORY</span><h2>{entries.length} {entries.length === 1 ? 'asset' : 'assets'}</h2></div><button className="button button-secondary" onClick={onReloadAssets} disabled={inventoryLoading}>{inventoryLoading ? 'Refreshing…' : 'Refresh'}</button></div>
+      <section className="panel inventory-panel asset-intelligence-panel">
+        <div className="panel-heading"><div><span className="eyebrow">PERSISTED INVENTORY</span><h2>Asset inventory</h2><p className="inventory-description">BREACH-X maps monitored assets to installed software and the CVEs assessed against them.</p></div><button className="button button-secondary" onClick={onReloadAssets} disabled={inventoryLoading}>{inventoryLoading ? 'Refreshing…' : 'Refresh inventory'}</button></div>
         {inventoryError && <div className="inventory-error compact-error" role="alert"><Icon name="alert" size={17} /><span><strong>Unable to load assets</strong><small>{inventoryError}</small></span></div>}
-        {inventoryLoading && entries.length === 0 ? <LoadingState label="Loading persisted assets…" /> : entries.length ? <div className="asset-card-grid">{entries.map((asset) => { const data = exposureById[asset.asset_id]; const matchedCount = data?.exposures.filter((row) => row.matched).length ?? 0; return <button className={`asset-card ${matchedCount ? 'has-exposure' : ''}`} key={asset.asset_id} onClick={() => navigate(`/assets/${encodeURIComponent(asset.asset_id)}`)}><div className="asset-card-top"><span className="asset-avatar"><Icon name="server" /></span><span className={`asset-state ${matchedCount ? 'state-exposed' : data ? 'state-clear' : 'state-pending'}`}><i />{matchedCount ? 'EXPOSED' : data ? 'CLEAR' : 'ASSESS'}</span></div><h3>{asset.hostname}</h3><p>{asset.ip_address} · {asset.asset_type}</p><p>{asset.operating_system || 'OS not specified'}</p><div className="asset-card-foot"><span><Icon name="software" size={15} />{data ? `${data.software.length} software` : 'Select to assess'}</span><span><Icon name="shield" size={15} />{data ? `${matchedCount} findings` : 'Not assessed'}</span></div><small className="asset-id">ID · {asset.asset_id}</small></button> })}</div> : !inventoryError && <EmptyState title="No assets registered" detail="Assets persisted through the BREACH-X API will appear here." />}
+        <div className="asset-inventory-controls"><label className="asset-search"><Icon name="search" size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search asset ID, name, or IP" aria-label="Search assets by ID, name, or IP address" />{search && <button type="button" onClick={() => setSearch('')} aria-label="Clear asset search">×</button>}</label><div className="asset-filter-pills" role="group" aria-label="Filter assets">{filters.map((item) => <button key={item.id} aria-pressed={filter === item.id} className={filter === item.id ? 'selected' : ''} onClick={() => setFilter(item.id)}>{item.label}<span>{item.count}</span></button>)}</div><span className="asset-result-count" role="status">{filteredEntries.length} of {entries.length} assets</span></div>
+        {inventoryLoading && entries.length === 0 ? <div className="asset-inventory-skeleton" aria-label="Loading asset inventory">{[0, 1, 2].map((index) => <div key={index}><i /><span /><b /><small /></div>)}</div> : filteredEntries.length ? <motion.div layout className="asset-intelligence-grid"><AnimatePresence initial={false} mode="popLayout">{filteredEntries.map((asset) => {
+          // #region agent log
+          fetch('http://127.0.0.1:7723/ingest/73e337ca-b123-45e1-8b5c-2dd62a3fdfad',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b40d23'},body:JSON.stringify({sessionId:'b40d23',runId:'pre-fix',hypothesisId:'C',location:'App.jsx:AssetsPage:card',message:'indexing errorsById for asset card',data:{assetId:asset.asset_id,canIndexErrorsById:errorsById!=null,errorValue:errorsById!=null?String(Boolean(errorsById[asset.asset_id])):'CRASH_IF_INDEX'},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          return <motion.div layout key={asset.asset_id} className="asset-intelligence-card-wrap" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -5 }} transition={{ duration: 0.2 }}><AssetExposureCard asset={asset} exposure={exposureById[asset.asset_id]} error={errorsById[asset.asset_id]} assessing={assessingInventory} onOpen={() => navigate(`/assets/${encodeURIComponent(asset.asset_id)}`)} /></motion.div>
+        })}</AnimatePresence></motion.div> : inventoryError && entries.length === 0 ? null : entries.length ? <EmptyState title="No assets match this view" detail="Try a different search or return to the full inventory." action={<button className="button button-secondary" onClick={() => { setSearch(''); setFilter('all') }}>Clear search and filters</button>} /> : <EmptyState title="No assets registered" detail="Assets persisted through the BREACH-X API will appear here." />}
       </section>
     </section>
   </>
@@ -324,8 +367,8 @@ function ExposuresPage({ rows, assets, assetRecords, onLookup, loading, error, n
   })
   return <>
     <Topbar title="Exposure findings" subtitle="Vulnerability checks across loaded assets" onLookup={onLookup} loading={loading} error={error} />
-    <section className="page-content"><div className="scope-notice"><span className="notice-mark">i</span><span>Findings are generated from locally stored CVEs and assets whose exposure details have been fetched. The backend does not expose a global exposure feed.</span></div><ExposureGraph rows={rows} assets={assetRecords} navigate={navigate} />
-      <section className="panel"><div className="panel-heading"><div><span className="eyebrow">EXPOSURE FINDINGS</span><h2>Matched CVE results</h2></div><span className="subtle-count">{withAsset.length} findings</span></div><ExposureTable rows={withAsset} showAsset emptyTitle="No matched vulnerabilities" /></section>
+    <section className="page-content"><div className="scope-notice"><span className="notice-mark">i</span><span>Assessments cover locally stored CVEs and assets whose exposure details have been fetched. The backend does not expose a global exposure feed.</span></div><ExposureGraph rows={rows} assets={assetRecords} navigate={navigate} />
+      <section className="panel"><div className="panel-heading exposure-heading"><div><span className="eyebrow">EXPOSURE ASSESSMENTS</span><h2>Software-to-CVE results</h2></div><div className="exposure-heading-tools"><span className="subtle-count">{withAsset.length} evaluated</span><div className="filter-pills" aria-label="Filter exposure assessments"><button aria-pressed={filter === 'all'} className={filter === 'all' ? 'selected' : ''} onClick={() => setFilter('all')}>All evaluated</button><button aria-pressed={filter === 'affected'} className={filter === 'affected' ? 'selected' : ''} onClick={() => setFilter('affected')}>Affected only</button></div></div></div><ExposureTable rows={withAsset} showAsset emptyTitle={filter === 'affected' ? 'No affected vulnerabilities' : 'No exposure checks yet'} /></section>
       {!rows.length && <section className="panel lookup-panel"><p className="muted-copy">Load an asset to retrieve its exposure data.</p><AssetLookup onLookup={onLookup} loading={loading} error={error} /></section>}
     </section>
   </>
@@ -389,8 +432,10 @@ export default function App() {
     try {
       const records = await getAssets()
       setAssetRecords(records)
+      if (!records.length) setAssessingInventory(false)
     } catch (error) {
       setInventoryError(error.message)
+      setAssessingInventory(false)
     } finally {
       setInventoryLoading(false)
     }
@@ -404,12 +449,25 @@ export default function App() {
     if (inventoryLoading || !assetRecords.length) return undefined
     let active = true
     setAssessingInventory(true)
+    setErrors((current) => {
+      const next = { ...current }
+      assetRecords.forEach((asset) => { next[asset.asset_id] = '' })
+      return next
+    })
     Promise.allSettled(assetRecords.map((asset) => getAssetExposure(asset.asset_id))).then((results) => {
       if (!active) return
       setExposureById((current) => {
         const next = { ...current }
         results.forEach((result, index) => {
           if (result.status === 'fulfilled') next[assetRecords[index].asset_id] = result.value
+        })
+        return next
+      })
+      setErrors((current) => {
+        const next = { ...current }
+        results.forEach((result, index) => {
+          const assetId = assetRecords[index].asset_id
+          next[assetId] = result.status === 'rejected' ? result.reason?.message || 'Unable to load asset exposure.' : ''
         })
         return next
       })
@@ -445,7 +503,7 @@ export default function App() {
 
   const allRows = useMemo(() => assetRecords.flatMap((asset) => {
     const result = exposureById[asset.asset_id]
-    return result ? result.exposures.filter((row) => row.matched).map((row) => ({ ...row, asset_id: asset.asset_id, asset_hostname: result.asset.hostname })) : []
+    return result ? result.exposures.map((row) => ({ ...row, asset_id: asset.asset_id, asset_hostname: result.asset.hostname })) : []
   }), [assetRecords, exposureById])
   const loadingCurrent = detailAssetId ? loadingIds.includes(detailAssetId) : loadingIds.length > 0
   const page = detailAssetId ? 'assets' : pathname === '/assets' ? 'assets' : pathname === '/exposures' ? 'exposures' : pathname === '/vulnerabilities' ? 'vulnerabilities' : pathname === '/threat-intel' ? 'threat-intel' : pathname === '/analytics' ? 'analytics' : 'overview'
@@ -456,13 +514,16 @@ export default function App() {
   }
 
   function renderPage() {
+    // #region agent log
+    fetch('http://127.0.0.1:7723/ingest/73e337ca-b123-45e1-8b5c-2dd62a3fdfad',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'b40d23'},body:JSON.stringify({sessionId:'b40d23',runId:'pre-fix',hypothesisId:'B',location:'App.jsx:renderPage',message:'renderPage branch',data:{pathname,hasDetailAssetId:Boolean(detailAssetId),errorsDefined:typeof errors!=='undefined',errorsIsObject:errors!=null&&typeof errors==='object',assessingInventory,willRenderAssetsPage:pathname==='/assets'&&!detailAssetId},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (detailAssetId) return <AssetDetail assetId={detailAssetId} result={exposureById[detailAssetId]} loading={loadingIds.includes(detailAssetId)} error={errors[detailAssetId]} onRetry={() => loadAsset(detailAssetId)} navigate={navigate} />
-    if (pathname === '/assets') return <AssetsPage assetRecords={assetRecords} exposureById={exposureById} onLookup={handleLookup} loading={loadingCurrent} error={lookupError} navigate={navigate} inventoryLoading={inventoryLoading} inventoryError={inventoryError} onReloadAssets={refreshAssets} />
+    if (pathname === '/assets') return <AssetsPage assetRecords={assetRecords} exposureById={exposureById} errorsById={errors} onLookup={handleLookup} loading={loadingCurrent} error={lookupError} navigate={navigate} inventoryLoading={inventoryLoading} inventoryError={inventoryError} onReloadAssets={refreshAssets} assessingInventory={assessingInventory} />
     if (pathname === '/exposures') return <ExposuresPage rows={allRows} assets={exposureById} assetRecords={assetRecords} onLookup={handleLookup} loading={loadingCurrent} error={lookupError} navigate={navigate} />
     if (pathname === '/vulnerabilities') return <VulnerabilitiesPage rows={allRows} onLookup={handleLookup} loading={loadingCurrent} error={lookupError} />
     if (pathname === '/threat-intel') return <ThreatIntelPage />
     if (pathname === '/analytics') return <AnalyticsPage rows={allRows} assets={assetRecords} assessedCount={assetRecords.filter((asset) => exposureById[asset.asset_id]).length} />
-    return <Overview assetRecords={assetRecords} exposureById={exposureById} allRows={allRows} onLookup={handleLookup} loading={loadingCurrent} error={lookupError} navigate={navigate} inventoryLoading={inventoryLoading} inventoryError={inventoryError} onReloadAssets={refreshAssets} assessingInventory={assessingInventory} />
+    return <Overview assetRecords={assetRecords} exposureById={exposureById} allRows={allRows} errorsById={errors} onLookup={handleLookup} loading={loadingCurrent} error={lookupError} navigate={navigate} apiState={apiState} inventoryLoading={inventoryLoading} inventoryError={inventoryError} onReloadAssets={refreshAssets} assessingInventory={assessingInventory} />
   }
 
   return <MotionConfig reducedMotion="user"><div className="app-shell"><Sidebar page={page} navigate={navigate} apiState={apiState} assetCount={assetRecords.length} /><main className="main-shell"><div className="mobile-brand"><button className="brand" onClick={() => navigate('/')}><span className="brand-mark"><span /><span /><span /></span><span className="brand-name">BREACH<span>-X</span></span></button><span className={`live-indicator ${apiState}`}><i /> API {apiState === 'online' ? 'reachable' : apiState === 'offline' ? 'unavailable' : 'checking'}</span></div><AnimatePresence mode="wait" initial={false}><motion.div key={pathname} className="route-transition" initial={{ opacity: 0, y: 7 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.2, ease: 'easeOut' }}>{renderPage()}</motion.div></AnimatePresence></main></div></MotionConfig>
